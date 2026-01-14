@@ -130,5 +130,6 @@ func TestTrace(t *testing.T) {
 
 func newTransport(ctx context.Context, port int, cfg *ssh.ClientConfig) (Transport, error) {
 	target := fmt.Sprintf("localhost:%d", port)
-	return NewSSHTransport(ctx, NewDialer(target, cfg), target)
+	return NewTransport(ctx, NewSSHDialer(target, cfg))
 }
+

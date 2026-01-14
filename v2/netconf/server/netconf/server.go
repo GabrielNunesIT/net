@@ -102,6 +102,57 @@ type ReplyData struct {
 	Data    string   `xml:",innerxml"`
 }
 
+// RPCRequestHeader contains the RPC envelope metadata without the body.
+// Use this with RPCRequestDecoder for streaming large request bodies.
+type RPCRequestHeader struct {
+	XMLName   xml.Name
+	MessageID string
+}
+
+// RPCRequestDecoder provides streaming access to an RPC request body.
+// It wraps a codec.Decoder to allow incremental decoding of the request content.
+type RPCRequestDecoder struct {
+	dec    *codec.Decoder
+	Header RPCRequestHeader
+}
+
+// NewRPCRequestDecoder creates a new decoder for streaming RPC request body.
+func NewRPCRequestDecoder(dec *codec.Decoder, header RPCRequestHeader) *RPCRequestDecoder {
+	return &RPCRequestDecoder{dec: dec, Header: header}
+}
+
+// Decoder returns the underlying codec.Decoder for custom decoding.
+func (d *RPCRequestDecoder) Decoder() *codec.Decoder {
+	return d.dec
+}
+
+// Token reads the next XML token from the request body.
+func (d *RPCRequestDecoder) Token() (xml.Token, error) {
+	return d.dec.Token()
+}
+
+// DecodeElement decodes an XML element into the provided value.
+func (d *RPCRequestDecoder) DecodeElement(v interface{}, start *xml.StartElement) error {
+	return d.dec.DecodeElement(v, start)
+}
+
+// Skip skips the current element and its children.
+func (d *RPCRequestDecoder) Skip() error {
+	return d.dec.Skip()
+}
+
+// StreamingSessionCallback extends SessionCallback with streaming request handling.
+// Implement this interface to handle large requests without buffering them entirely.
+type StreamingSessionCallback interface {
+	SessionCallback
+
+	// HandleStreamingRequest handles an RPC request with streaming body access.
+	// The decoder provides access to the request body tokens.
+	// Return nil to indicate the request was handled; the caller should send no response.
+	// Return a reply to have it sent, or return nil and write your own response.
+	HandleStreamingRequest(decoder *RPCRequestDecoder) *RPCReplyMessage
+}
+
 // RequestHandler is a function type that will be invoked by the session handler to handle an RPC
 // request.
 type RequestHandler func(h *SessionHandler, req *RPCRequestMessage)
@@ -240,6 +291,26 @@ func (h *SessionHandler) handleHello(token xml.StartElement) {
 }
 
 func (h *SessionHandler) handleRPC(token xml.StartElement) {
+	// Check if the callback supports streaming
+	if streamingCb, ok := h.cb.(StreamingSessionCallback); ok {
+		// Extract message-id from the RPC element attributes
+		header := RPCRequestHeader{XMLName: token.Name}
+		for _, attr := range token.Attr {
+			if attr.Name.Local == "message-id" {
+				header.MessageID = attr.Value
+				break
+			}
+		}
+
+		decoder := NewRPCRequestDecoder(h.dec, header)
+		reply := streamingCb.HandleStreamingRequest(decoder)
+		if reply != nil {
+			_ = h.encode(reply)
+		}
+		return
+	}
+
+	// Fall back to buffered request handling
 	request := &RPCRequestMessage{}
 	err := h.decodeElement(&request, &token)
 	if err != nil {
@@ -264,4 +335,24 @@ func (h *SessionHandler) encode(m interface{}) error {
 	err := h.enc.Encode(m)
 	h.server.trace.Encoded(h, err)
 	return err
+}
+
+// SendReply sends an RPC reply message to the client.
+// This is useful when handling streaming requests where you need to send the response manually.
+func (h *SessionHandler) SendReply(reply *RPCReplyMessage) error {
+	return h.encode(reply)
+}
+
+// Encoder returns the session's encoder for advanced streaming response scenarios.
+// The caller must hold the encoder lock (use WithEncoder for safe access).
+func (h *SessionHandler) Encoder() *codec.Encoder {
+	return h.enc
+}
+
+// WithEncoder executes a function with exclusive access to the encoder.
+// Use this for writing streaming responses.
+func (h *SessionHandler) WithEncoder(fn func(enc *codec.Encoder) error) error {
+	h.encLock.Lock()
+	defer h.encLock.Unlock()
+	return fn(h.enc)
 }

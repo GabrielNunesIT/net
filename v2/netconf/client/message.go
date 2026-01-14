@@ -75,7 +75,7 @@ func NewSession(ctx context.Context, t Transport, cfg *Config) (Session, error) 
 	si := &sesImpl{
 		cfg:    cfg,
 		t:      t,
-		target: t.(*tImpl).target,
+		target: t.Target(),
 		dec:    codec.NewDecoder(t),
 		enc:    codec.NewEncoder(t),
 		trace:  ContextClientTrace(ctx),

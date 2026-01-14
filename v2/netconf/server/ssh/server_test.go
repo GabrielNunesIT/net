@@ -53,7 +53,7 @@ func TestServer(t *testing.T) {
 
 	ctx = context.Background()
 	target := fmt.Sprintf("localhost:%d", server.Port())
-	tr, err := client.NewSSHTransport(ctx, client.NewDialer(target, sshConfig), target)
+	tr, err := client.NewTransport(ctx, client.NewSSHDialer(target, sshConfig))
 	assert.NoError(t, err, "Not expecting new transport to fail")
 	defer tr.Close()
 
@@ -94,7 +94,7 @@ func TestServerConnectionFailure(t *testing.T) {
 
 	ctx = context.Background()
 	target := fmt.Sprintf("localhost:%d", server.Port())
-	_, err = client.NewSSHTransport(ctx, client.NewDialer(target, sshConfig), target)
+	_, err = client.NewTransport(ctx, client.NewSSHDialer(target, sshConfig))
 	assert.Error(t, err, "Not expecting new transport to succeed")
 	assert.Contains(t, err.Error(), "authenticate")
 }
@@ -119,7 +119,7 @@ func TestServerDiagnosticTraceHooks(t *testing.T) {
 
 	ctx = context.Background()
 	target := fmt.Sprintf("localhost:%d", server.Port())
-	tr, err := client.NewSSHTransport(ctx, client.NewDialer(target, sshConfig), target)
+	tr, err := client.NewTransport(ctx, client.NewSSHDialer(target, sshConfig))
 	assert.NoError(t, err, "Not expecting new transport to fail")
 	defer tr.Close()
 
@@ -149,7 +149,7 @@ func TestServerNoOpTraceHooks(t *testing.T) {
 
 	ctx = context.Background()
 	target := fmt.Sprintf("localhost:%d", server.Port())
-	tr, err := client.NewSSHTransport(ctx, client.NewDialer(target, sshConfig), target)
+	tr, err := client.NewTransport(ctx, client.NewSSHDialer(target, sshConfig))
 	assert.NoError(t, err, "Not expecting new transport to fail")
 	defer tr.Close()
 

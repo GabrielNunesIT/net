@@ -4,8 +4,6 @@ import (
 	"context"
 	"io"
 	"time"
-
-	"golang.org/x/crypto/ssh"
 )
 
 // The Secure Transport layer provides a communication path between
@@ -16,160 +14,76 @@ import (
 // layer object.
 type Transport interface {
 	io.ReadWriteCloser
+	// Target returns the connection target address for tracing purposes.
+	Target() string
 }
 
-type tImpl struct {
-	reader      io.Reader
-	writeCloser io.WriteCloser
-	sshSession  *ssh.Session
-	sshClient   *ssh.Client
-	trace       *ClientTrace
-	target      string
-	dialer      SSHClientFactory
+// transportImpl is the generic transport implementation that wraps any Dialer.
+type transportImpl struct {
+	conn   io.ReadWriteCloser
+	trace  *ClientTrace
+	target string
+	dialer Dialer
 }
 
-// SSHClientFactory defines a factory that provides an SSH client.
-type SSHClientFactory interface {
-	Dial(ctx context.Context) (*ssh.Client, error)
-	// Close will close the client (assumed to have been returned by an earlier call to the Dial method), if
-	// appropriate.
-	Close(*ssh.Client) error
-}
+// NewTransport creates a new transport using the provided Dialer.
+// This is the generic transport factory that works with any Dialer implementation.
+func NewTransport(ctx context.Context, dialer Dialer) (rt Transport, err error) {
+	impl := &transportImpl{
+		target: dialer.Target(),
+		dialer: dialer,
+		trace:  ContextClientTrace(ctx),
+	}
 
-// NewSSHTransport creates a new SSH transport, connecting to the target with the supplied client configuration
-// and requesting the specified subsystem.
-func NewSSHTransport(ctx context.Context, dialer SSHClientFactory, target string) (rt Transport, err error) {
-	impl := tImpl{target: target, dialer: dialer}
-	impl.trace = ContextClientTrace(ctx)
-
-	impl.trace.ConnectStart(target)
+	impl.trace.ConnectStart(impl.target)
 
 	defer func(begin time.Time) {
-		impl.trace.ConnectDone(target, err, time.Since(begin))
+		impl.trace.ConnectDone(impl.target, err, time.Since(begin))
 	}(time.Now())
 
 	defer func() {
-		if err != nil {
-			dialer.Close(impl.sshClient)
-			if impl.sshSession != nil {
-				_ = impl.sshSession.Close()
-			}
+		if err != nil && impl.conn != nil {
+			_ = dialer.Close(impl.conn)
 		}
 	}()
 
-	impl.sshClient, err = dialer.Dial(ctx)
+	impl.conn, err = dialer.Dial(ctx)
 	if err != nil {
-		return
+		return nil, err
 	}
 
-	if impl.sshSession, err = impl.sshClient.NewSession(); err != nil {
-		return
-	}
-
-	if err = impl.sshSession.RequestSubsystem("netconf"); err != nil {
-		return
-	}
-
-	if impl.reader, err = impl.sshSession.StdoutPipe(); err != nil {
-		return
-	}
-
-	if impl.writeCloser, err = impl.sshSession.StdinPipe(); err != nil {
-		return
-	}
-
-	impl.injectTraceReader()
-	impl.injectTraceWriter()
-
-	rt = &impl
-	return rt, err
+	return impl, nil
 }
 
-func (t *tImpl) Read(p []byte) (n int, err error) {
-	return t.reader.Read(p)
+// Target returns the connection target address.
+func (t *transportImpl) Target() string {
+	return t.target
 }
 
-func (t *tImpl) Write(p []byte) (n int, err error) {
-	return t.writeCloser.Write(p)
+func (t *transportImpl) Read(p []byte) (n int, err error) {
+	t.trace.ReadStart(p)
+	defer func(begin time.Time) {
+		t.trace.ReadDone(p, n, err, time.Since(begin))
+	}(time.Now())
+
+	return t.conn.Read(p)
 }
 
-// Close closes all session resources in the following order:
-//
-//  1. stdin pipe
-//  2. SSH session
-//  3. SSH client
-//
-// Errors are returned with priority matching the same order.
-func (t *tImpl) Close() (err error) {
+func (t *transportImpl) Write(p []byte) (n int, err error) {
+	t.trace.WriteStart(p)
+	defer func(begin time.Time) {
+		t.trace.WriteDone(p, n, err, time.Since(begin))
+	}(time.Now())
+
+	return t.conn.Write(p)
+}
+
+// Close closes the transport connection.
+func (t *transportImpl) Close() (err error) {
 	defer t.trace.ConnectionClosed(t.target, err)
 
-	var (
-		writeCloseErr      error
-		sshSessionCloseErr error
-	)
-
-	if t.writeCloser != nil {
-		writeCloseErr = t.writeCloser.Close()
+	if t.conn != nil {
+		err = t.dialer.Close(t.conn)
 	}
-
-	if t.sshSession != nil {
-		sshSessionCloseErr = t.sshSession.Close()
-	}
-
-	// Use dialer to close the client, so we don't close a pre-existing client.
-	err = t.dialer.Close(t.sshClient)
-
-	if err == nil {
-		err = writeCloseErr
-	}
-
-	if err == nil {
-		err = sshSessionCloseErr
-	}
-
 	return err
-}
-
-type traceReader struct {
-	r     io.Reader
-	trace *ClientTrace
-}
-
-func (t *tImpl) injectTraceReader() {
-	t.reader = &traceReader{r: t.reader, trace: t.trace}
-}
-
-func (tr *traceReader) Read(p []byte) (c int, err error) {
-	tr.trace.ReadStart(p)
-	defer func(begin time.Time) {
-		tr.trace.ReadDone(p, c, err, time.Since(begin))
-	}(time.Now())
-
-	c, err = tr.r.Read(p)
-
-	return
-}
-
-type traceWriter struct {
-	w     io.WriteCloser
-	trace *ClientTrace
-}
-
-func (t *tImpl) injectTraceWriter() {
-	t.writeCloser = &traceWriter{w: t.writeCloser, trace: t.trace}
-}
-
-func (tw *traceWriter) Write(p []byte) (c int, err error) {
-	tw.trace.WriteStart(p)
-	defer func(begin time.Time) {
-		tw.trace.WriteDone(p, c, err, time.Since(begin))
-	}(time.Now())
-
-	c, err = tw.w.Write(p)
-
-	return
-}
-
-func (tw *traceWriter) Close() (err error) {
-	return tw.w.Close()
 }
