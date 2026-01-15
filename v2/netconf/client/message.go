@@ -35,7 +35,7 @@ type Session interface {
 
 	// Close closes the session and releases any associated resources.
 	// The channel will be automatically closed if the underlying network connection is closed, for
-	// example if the remote server discoonects.
+	// example if the remote server disconnects.
 	// When the session is closed, any outstanding execute requests and reads from a notification
 	// channel will return nil.
 	Close()

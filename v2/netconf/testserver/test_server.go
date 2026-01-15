@@ -27,13 +27,13 @@ type SSHHandler interface {
 // HandlerFactory is a test function that will deliver an SSHHandler.
 type HandlerFactory func(t assert.TestingT) SSHHandler
 
-// NewSSHServer deflivers a new test SSH Server, with a Handler that simply echoes lines received.
+// NewSSHServer delivers a new test SSH Server, with a Handler that simply echoes lines received.
 // The server implements password authentication with the given credentials.
 func NewSSHServer(t assert.TestingT, uname, password string) *SSHServer {
 	return NewSSHServerHandler(t, uname, password, func(t assert.TestingT) SSHHandler { return &echoer{} })
 }
 
-// NewSSHServerHandler deflivers a new test SSH Server, with a custom channel handler.
+// NewSSHServerHandler delivers a new test SSH Server, with a custom channel handler.
 // The server implements password authentication with the given credentials.
 func NewSSHServerHandler(t assert.TestingT, uname, password string, factory HandlerFactory, opts ...ServerOption) *SSHServer {
 	serverOptions := &serverOptions{requestTypes: []string{"subsystem"}}
